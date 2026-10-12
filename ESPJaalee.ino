@@ -9,6 +9,8 @@
 
 const char *const SENSOR_ADDRESS = "AA:AA:AA:AA:AA:AA"; //TODO: Enter your sensors address, usually printed on the side of the device
 const int TFT_BACKLIGHT_PIN = -1; // Set to -1 if your board has no backlight GPIO.
+const bool USE_FAHRENHEIT = true; // Set to true for Fahrenheit on the LCD and Serial output.
+const char *const TEMPERATURE_UNIT = USE_FAHRENHEIT ? " F" : " C";
 const uint32_t STALE_AFTER_MS = 30000;
 const uint32_t SERIAL_INTERVAL_MS = 5000;
 
@@ -117,6 +119,12 @@ float temperatureC(const SensorReading &reading)
     return reading.rawTemperature * 175.0f / 65535.0f - 45.0f;
 }
 
+float temperatureForDisplay(float celsius)
+{
+    // Convert only the output; VPD calculations require Celsius.
+    return USE_FAHRENHEIT ? celsius * 9.0f / 5.0f + 32.0f : celsius;
+}
+
 float humidityPercent(const SensorReading &reading)
 {
     return reading.rawHumidity * 100.0f / 65535.0f;
@@ -177,7 +185,7 @@ void drawReading(const SensorReading &reading, uint32_t now)
     const uint32_t age = now - reading.receivedAt;
     const bool stale = age >= STALE_AFTER_MS;
     const uint16_t valueColor = !reading.valid || stale ? TFT_LIGHTGREY : TFT_WHITE;
-    drawValue(displayedTemperature, reading.valid ? String(temperature, 2) + " C" : "-- C",
+    drawValue(displayedTemperature, reading.valid ? String(temperatureForDisplay(temperature), 2) + TEMPERATURE_UNIT : String("--") + TEMPERATURE_UNIT,
               0, humidityTop, valueColor, 4, 2);
     drawValue(displayedHumidity, reading.valid ? String(humidity, 2) + "%" : "--%",
               humidityTop, vpdTop, valueColor, 4);
@@ -234,8 +242,8 @@ void logReading(const SensorReading &reading, uint32_t now)
 
     const float temperature = temperatureC(reading);
     const float humidity = humidityPercent(reading);
-    Serial.printf("%s  %.2f C  %.2f%% RH  VPD %.3f kPa  Battery %s  RSSI %d dBm\n",
-                  SENSOR_ADDRESS, temperature, humidity, vpdKPa(temperature, humidity),
+    Serial.printf("%s  %.2f%s  %.2f%% RH  VPD %.3f kPa  Battery %s  RSSI %d dBm\n",
+                  SENSOR_ADDRESS, temperatureForDisplay(temperature), TEMPERATURE_UNIT, humidity, vpdKPa(temperature, humidity),
                   batteryLabel(reading.battery).c_str(), reading.rssi);
     lastPrinted = reading;
     lastPrintedAt = now;

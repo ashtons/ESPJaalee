@@ -8,10 +8,20 @@ Install the ESP32 board support and the `TFT_eSPI` library in Arduino IDE.
 `TFT_eSPI` must be configured in the library's setup file because the library is
 compiled separately from the sketch. 
 
+Set your device bluetooth address
+
+> const char *const SENSOR_ADDRESS = "AA:AA:AA:AA:AA:AA";
+
+Set the units
+
+> const bool USE_FAHRENHEIT = true; 
+
+
 ## Screenshots
 
-![Screenshot](./docs/screenshot.png)
+![Screenshot Celsius](./docs/screenshot.png)
 
+![Screenshot Fahrenheit](./docs/screenshot2.png)
 
 The UI renders into a 16-bit framebuffer (about 63 KiB on the original
 240 × 135 T-Display). Only changed text or colours trigger a screen update;
