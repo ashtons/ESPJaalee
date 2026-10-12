@@ -1,6 +1,6 @@
 # ESPJaalee
 Simple implementation of a Bluetooth app listening for current sensor broadcasts from a Jaalee sensor and displaying the values on the TFT display.
-
+![Jaalee Sensor](./docs/sensor.png)
 ## Setup
 
 Install the ESP32 board support and the `TFT_eSPI` library in Arduino IDE.
