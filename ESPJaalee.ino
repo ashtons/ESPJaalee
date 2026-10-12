@@ -1,5 +1,5 @@
 /*
- * JAALEE broadcast monitor: no connection, pairing, or sensor writes.
+ * JAALEE passive broadcast monitor: no scan requests, connection, or sensor writes.
  */
 #include <TFT_eSPI.h>
 #include <BLEDevice.h>
@@ -9,7 +9,6 @@
 
 const char *const SENSOR_ADDRESS = "AA:AA:AA:AA:AA:AA"; //TODO: Enter your sensors address, usually printed on the side of the device
 const int TFT_BACKLIGHT_PIN = 4; // Set to -1 if your board has no backlight GPIO.
-const uint32_t SCAN_SECONDS = 2;
 const uint32_t STALE_AFTER_MS = 30000;
 const uint32_t SERIAL_INTERVAL_MS = 5000;
 
@@ -145,7 +144,7 @@ void drawReading(const SensorReading &reading, uint32_t now)
         drawLine("Temperature: --", 3, TFT_WHITE);
         drawLine("Humidity: --", 4, TFT_WHITE);
         drawLine("VPD: --", 5, TFT_WHITE);
-        drawLine("Active BLE scan", 6, TFT_LIGHTGREY, 1);
+        drawLine("Passive BLE listening", 6, TFT_LIGHTGREY, 1);
         return;
     }
 
@@ -204,19 +203,21 @@ void setup()
     scanner = BLEDevice::getScan();
     // Repeated advertisements refresh reception time even if values are equal.
     scanner->setAdvertisedDeviceCallbacks(&scanCallbacks, true);
-    scanner->setActiveScan(true); // Request F51C scan responses; never connect.
+    // Listen only: readings are in manufacturer advertisements, so there is
+    // no need to transmit requests for the extra F51C scan-response data.
+    scanner->setActiveScan(false);
     scanner->setInterval(100);
-    scanner->setWindow(99);
-    Serial.printf("Scanning broadcasts from %s\n", SENSOR_ADDRESS);
+    scanner->setWindow(100); // Equal interval/window keeps the receiver listening.
+    Serial.printf("Passively listening for broadcasts from %s\n", SENSOR_ADDRESS);
+    // Duration 0 listens indefinitely. Select the asynchronous overload so
+    // setup returns and the Arduino loop can update the LCD and Serial.
+    if (!scanner->start(0, static_cast<void (*)(BLEScanResults)>(nullptr), false)) {
+        Serial.println("Failed to start passive BLE listening");
+    }
 }
 
 void loop()
 {
-    // Short blocking scans work across ESP32 Arduino 2.x and 3.x BLE APIs.
-    // Ignore the result return type (it differs between those core versions).
-    scanner->start(SCAN_SECONDS, false);
-    scanner->clearResults(); // Release discovered devices after every scan.
-
     SensorReading reading;
     portENTER_CRITICAL(&readingMutex);
     reading = latestReading;
@@ -224,5 +225,5 @@ void loop()
     const uint32_t now = millis();
     drawReading(reading, now);
     logReading(reading, now);
-    delay(10);
+    delay(250); // Pace display refreshes; BLE reception continues on its own task.
 }
