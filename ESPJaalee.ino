@@ -40,6 +40,8 @@ void drawValue(DisplayValue &displayed, const String &text, int top, int bottom,
                int font, int textSize = 1, bool centered = true);
 
 TFT_eSPI tft = TFT_eSPI();
+TFT_eSprite screen = TFT_eSprite(&tft);
+bool screenDirty = false;
 BLEScan *scanner = nullptr;
 SensorReading latestReading = {};
 portMUX_TYPE readingMutex = portMUX_INITIALIZER_UNLOCKED;
@@ -139,26 +141,29 @@ void drawValue(DisplayValue &displayed, const String &text, int top, int bottom,
     // not redraw. Color changes still redraw stale or newly refreshed values.
     if (displayed.drawn && displayed.text == text && displayed.color == color) return;
 
-    // Clear each value's area so shorter readings leave no old digits behind.
-    tft.fillRect(0, top, tft.width(), bottom - top, TFT_BLACK);
-    tft.setTextColor(color, TFT_BLACK);
-    tft.setTextSize(textSize);
+    // Clear and draw in RAM, then push the completed frame to avoid displaying
+    // the blank area between clearing a value and drawing its replacement.
+    screen.fillRect(0, top, screen.width(), bottom - top, TFT_BLACK);
+    screen.setTextColor(color, TFT_BLACK);
+    screen.setTextSize(textSize);
     // Fit the large temperature text to the configured display dimensions.
-    while (textSize > 1 && (tft.textWidth(text, font) > tft.width() - 8 ||
-                            tft.fontHeight(font) > bottom - top - 4)) {
-        tft.setTextSize(--textSize);
+    while (textSize > 1 && (screen.textWidth(text, font) > screen.width() - 8 ||
+                            screen.fontHeight(font) > bottom - top - 4)) {
+        screen.setTextSize(--textSize);
     }
-    tft.setTextDatum(centered ? MC_DATUM : BL_DATUM);
-    tft.drawString(text, centered ? tft.width() / 2 : 4,
+    screen.setTextDatum(centered ? MC_DATUM : BL_DATUM);
+    screen.drawString(text, centered ? screen.width() / 2 : 4,
                    centered ? (top + bottom) / 2 : bottom - 4, font);
-    tft.setTextSize(1);
+    screen.setTextSize(1);
     displayed.text = text;
     displayed.color = color;
     displayed.drawn = true;
+    screenDirty = true;
 }
 
 void drawReading(const SensorReading &reading, uint32_t now)
 {
+    if (!screen.created()) return;
     static DisplayValue displayedTemperature = {};
     static DisplayValue displayedHumidity = {};
     static DisplayValue displayedVpd = {};
@@ -180,6 +185,39 @@ void drawReading(const SensorReading &reading, uint32_t now)
               vpdTop, batteryTop, valueColor, 2);
     drawValue(displayedBattery, reading.valid && reading.battery <= 100 ? String(reading.battery) + "%" : "--%",
               batteryTop, tft.height(), TFT_LIGHTGREY, 2, 1, false);
+    if (screenDirty) {
+        screen.pushSprite(0, 0);
+        screenDirty = false;
+    }
+}
+
+void sendScreenshot()
+{
+    if (!screen.created()) {
+        Serial.println("ESPJAALEE_SCREENSHOT_ERROR framebuffer unavailable");
+        return;
+    }
+
+    // The loop owns both rendering and serial output, so the framebuffer stays
+    // unchanged and logs cannot interrupt this binary transfer. BLE keeps running.
+    Serial.printf("ESPJAALEE_SCREENSHOT %d %d RGB565\n", screen.width(), screen.height());
+    uint8_t chunk[128];
+    size_t used = 0;
+    for (int y = 0; y < screen.height(); ++y) {
+        for (int x = 0; x < screen.width(); ++x) {
+            // readPixel returns RGB565 independent of the sprite's internal byte order.
+            const uint16_t pixel = screen.readPixel(x, y);
+            chunk[used++] = pixel >> 8;
+            chunk[used++] = pixel & 0xFF;
+            if (used == sizeof(chunk)) {
+                Serial.write(chunk, used);
+                used = 0;
+            }
+        }
+    }
+    if (used > 0) Serial.write(chunk, used);
+    Serial.print("\nESPJAALEE_SCREENSHOT_END\n");
+    Serial.flush();
 }
 
 void logReading(const SensorReading &reading, uint32_t now)
@@ -217,6 +255,14 @@ void setup()
     tft.setTextDatum(TL_DATUM);
     tft.fillScreen(TFT_BLACK);
     Serial.printf("LCD initialized: %d x %d\n", tft.width(), tft.height());
+    screen.setColorDepth(16);
+    if (screen.createSprite(tft.width(), tft.height()) == nullptr) {
+        Serial.println("Failed to allocate display framebuffer");
+        tft.setTextColor(TFT_RED, TFT_BLACK);
+        tft.drawString("Framebuffer unavailable", 4, 4, 2);
+    } else {
+        screen.fillSprite(TFT_BLACK);
+    }
     drawReading(latestReading, millis());
 
     BLEDevice::init("");
@@ -244,6 +290,9 @@ void loop()
     portEXIT_CRITICAL(&readingMutex);
     const uint32_t now = millis();
     drawReading(reading, now);
+    while (Serial.available() > 0) {
+        if (Serial.read() == 's') sendScreenshot();
+    }
     logReading(reading, now);
     delay(250); // Pace display refreshes; BLE reception continues on its own task.
 }
