@@ -8,7 +8,7 @@
 #include <string.h>
 
 const char *const SENSOR_ADDRESS = "AA:AA:AA:AA:AA:AA"; //TODO: Enter your sensors address, usually printed on the side of the device
-const int TFT_BACKLIGHT_PIN = 4; // Set to -1 if your board has no backlight GPIO.
+const int TFT_BACKLIGHT_PIN = -1; // Set to -1 if your board has no backlight GPIO.
 const uint32_t STALE_AFTER_MS = 30000;
 const uint32_t SERIAL_INTERVAL_MS = 5000;
 
@@ -26,11 +26,18 @@ struct SensorReading {
     bool valid;
 };
 
+struct DisplayValue {
+    String text;
+    uint16_t color;
+    bool drawn;
+};
+
 float temperatureC(const SensorReading &reading);
 float humidityPercent(const SensorReading &reading);
 void drawReading(const SensorReading &reading, uint32_t now);
 void logReading(const SensorReading &reading, uint32_t now);
-void drawLine(const String &text, int row, uint16_t color, int font = 2);
+void drawValue(DisplayValue &displayed, const String &text, int top, int bottom, uint16_t color,
+               int font, int textSize = 1, bool centered = true);
 
 TFT_eSPI tft = TFT_eSPI();
 BLEScan *scanner = nullptr;
@@ -125,41 +132,54 @@ String batteryLabel(uint8_t battery)
     return battery <= 100 ? String(battery) + "%" : "unknown (" + String(battery) + ")";
 }
 
-void drawLine(const String &text, int row, uint16_t color, int font)
+void drawValue(DisplayValue &displayed, const String &text, int top, int bottom, uint16_t color,
+               int font, int textSize, bool centered)
 {
-    const int rowHeight = tft.height() / 7;
-    const int y = row * rowHeight;
-    // Clear each row rather than blanking the entire screen on every update.
-    tft.fillRect(0, y, tft.width(), rowHeight, TFT_BLACK);
+    // Compare the formatted text so changes below the displayed precision do
+    // not redraw. Color changes still redraw stale or newly refreshed values.
+    if (displayed.drawn && displayed.text == text && displayed.color == color) return;
+
+    // Clear each value's area so shorter readings leave no old digits behind.
+    tft.fillRect(0, top, tft.width(), bottom - top, TFT_BLACK);
     tft.setTextColor(color, TFT_BLACK);
-    tft.drawString(text, 4, y, font);
+    tft.setTextSize(textSize);
+    // Fit the large temperature text to the configured display dimensions.
+    while (textSize > 1 && (tft.textWidth(text, font) > tft.width() - 8 ||
+                            tft.fontHeight(font) > bottom - top - 4)) {
+        tft.setTextSize(--textSize);
+    }
+    tft.setTextDatum(centered ? MC_DATUM : BL_DATUM);
+    tft.drawString(text, centered ? tft.width() / 2 : 4,
+                   centered ? (top + bottom) / 2 : bottom - 4, font);
+    tft.setTextSize(1);
+    displayed.text = text;
+    displayed.color = color;
+    displayed.drawn = true;
 }
 
 void drawReading(const SensorReading &reading, uint32_t now)
 {
-    drawLine("JAALEE sensor", 0, TFT_CYAN);
-    drawLine(SENSOR_ADDRESS, 1, TFT_LIGHTGREY, 1);
-    if (!reading.valid) {
-        drawLine("Waiting for broadcasts", 2, TFT_YELLOW);
-        drawLine("Temperature: --", 3, TFT_WHITE);
-        drawLine("Humidity: --", 4, TFT_WHITE);
-        drawLine("VPD: --", 5, TFT_WHITE);
-        drawLine("Passive BLE listening", 6, TFT_LIGHTGREY, 1);
-        return;
-    }
+    static DisplayValue displayedTemperature = {};
+    static DisplayValue displayedHumidity = {};
+    static DisplayValue displayedVpd = {};
+    static DisplayValue displayedBattery = {};
 
+    const int humidityTop = tft.height() * 45 / 100;
+    const int vpdTop = tft.height() * 68 / 100;
+    const int batteryTop = tft.height() * 84 / 100;
     const float temperature = temperatureC(reading);
     const float humidity = humidityPercent(reading);
     const uint32_t age = now - reading.receivedAt;
     const bool stale = age >= STALE_AFTER_MS;
-    const uint16_t valueColor = stale ? TFT_LIGHTGREY : TFT_WHITE;
-    drawLine("Temp: " + String(temperature, 2) + " C", 2, valueColor);
-    drawLine("Humidity: " + String(humidity, 2) + "% RH", 3, valueColor);
-    drawLine("VPD: " + String(vpdKPa(temperature, humidity), 3) + " kPa", 4, valueColor);
-    drawLine("Battery " + batteryLabel(reading.battery) + "  " +
-             String(reading.rssi) + " dBm", 5, TFT_LIGHTGREY, 1);
-    drawLine(String(stale ? "STALE - last RX " : "Last RX ") +
-             String(age / 1000) + "s ago", 6, stale ? TFT_YELLOW : TFT_GREEN, 1);
+    const uint16_t valueColor = !reading.valid || stale ? TFT_LIGHTGREY : TFT_WHITE;
+    drawValue(displayedTemperature, reading.valid ? String(temperature, 2) + " C" : "-- C",
+              0, humidityTop, valueColor, 4, 2);
+    drawValue(displayedHumidity, reading.valid ? String(humidity, 2) + "%" : "--%",
+              humidityTop, vpdTop, valueColor, 4);
+    drawValue(displayedVpd, reading.valid ? "VPD: " + String(vpdKPa(temperature, humidity), 3) + " kPa" : "VPD: -- kPa",
+              vpdTop, batteryTop, valueColor, 2);
+    drawValue(displayedBattery, reading.valid && reading.battery <= 100 ? String(reading.battery) + "%" : "--%",
+              batteryTop, tft.height(), TFT_LIGHTGREY, 2, 1, false);
 }
 
 void logReading(const SensorReading &reading, uint32_t now)
