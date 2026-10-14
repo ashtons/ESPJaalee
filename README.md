@@ -1,9 +1,27 @@
 # ESPJaalee
 Simple implementation of a Bluetooth app listening for current sensor broadcasts from a Jaalee sensor and displaying the values on the TFT display.
+
 ![Jaalee Sensor](./docs/sensor.png)
+
 ## Setup
 
 Install the ESP32 board support and the `TFT_eSPI` library in Arduino IDE.
+
+For console-only output, set `#define ENABLE_TFT 0` near the top of
+`ESPJaalee.ino`. This disables TFT initialization and rendering; the
+`TFT_eSPI` library is only required when `ENABLE_TFT` is `1` (the default).
+Open Serial Monitor at 115200 baud to see sensor readings. Screenshot capture
+is unavailable in console-only mode.
+
+On ESP32-C3 boards using native USB, select **Tools → USB CDC On Boot → Enabled**
+in Arduino IDE, then upload again. Select the board's USB port and open Serial
+Monitor at 115200 baud; press RESET if needed. For boards using an external
+USB-to-UART bridge such as CH340 or CP210x, leave USB CDC On Boot disabled.
+See [Espressif's USB CDC guide](https://docs.espressif.com/projects/arduino-esp32/en/latest/tutorials/cdc_dfu_flash.html).
+
+The sketch waits up to three seconds for a USB console at startup and prints a
+status message every five seconds while waiting for sensor broadcasts or when
+the last reading is stale.
 
 `TFT_eSPI` must be configured in the library's setup file because the library is
 compiled separately from the sketch. 

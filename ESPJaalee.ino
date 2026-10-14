@@ -1,7 +1,12 @@
 /*
  * JAALEE passive broadcast monitor: no scan requests, connection, or sensor writes.
  */
+// Set to 0 for console-only operation without the TFT_eSPI library.
+#define ENABLE_TFT 0
+
+#if ENABLE_TFT
 #include <TFT_eSPI.h>
+#endif
 #include <BLEDevice.h>
 #include <BLEScan.h>
 #include <math.h>
@@ -28,22 +33,26 @@ struct SensorReading {
     bool valid;
 };
 
+#if ENABLE_TFT
 struct DisplayValue {
     String text;
     uint16_t color;
     bool drawn;
 };
+#endif
 
 float temperatureC(const SensorReading &reading);
 float humidityPercent(const SensorReading &reading);
-void drawReading(const SensorReading &reading, uint32_t now);
 void logReading(const SensorReading &reading, uint32_t now);
+#if ENABLE_TFT
+void drawReading(const SensorReading &reading, uint32_t now);
 void drawValue(DisplayValue &displayed, const String &text, int top, int bottom, uint16_t color,
                int font, int textSize = 1, bool centered = true);
 
 TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite screen = TFT_eSprite(&tft);
 bool screenDirty = false;
+#endif
 BLEScan *scanner = nullptr;
 SensorReading latestReading = {};
 portMUX_TYPE readingMutex = portMUX_INITIALIZER_UNLOCKED;
@@ -142,6 +151,7 @@ String batteryLabel(uint8_t battery)
     return battery <= 100 ? String(battery) + "%" : "unknown (" + String(battery) + ")";
 }
 
+#if ENABLE_TFT
 void drawValue(DisplayValue &displayed, const String &text, int top, int bottom, uint16_t color,
                int font, int textSize, bool centered)
 {
@@ -199,8 +209,11 @@ void drawReading(const SensorReading &reading, uint32_t now)
     }
 }
 
+#endif
+
 void sendScreenshot()
 {
+#if ENABLE_TFT
     if (!screen.created()) {
         Serial.println("ESPJAALEE_SCREENSHOT_ERROR framebuffer unavailable");
         return;
@@ -226,13 +239,30 @@ void sendScreenshot()
     if (used > 0) Serial.write(chunk, used);
     Serial.print("\nESPJAALEE_SCREENSHOT_END\n");
     Serial.flush();
+#else
+    Serial.println("ESPJAALEE_SCREENSHOT_ERROR TFT disabled");
+#endif
 }
 
 void logReading(const SensorReading &reading, uint32_t now)
 {
     static SensorReading lastPrinted = {};
     static uint32_t lastPrintedAt = 0;
-    if (!reading.valid) return;
+    static uint32_t lastStatusAt = 0;
+    if (!reading.valid || now - reading.receivedAt >= STALE_AFTER_MS) {
+        // Keep the console informative even when no matching broadcasts arrive
+        // or the monitor opens after the startup messages have been sent.
+        if (now - lastStatusAt >= SERIAL_INTERVAL_MS) {
+            if (!reading.valid) {
+                Serial.printf("Waiting for broadcasts from %s\n", SENSOR_ADDRESS);
+            } else {
+                Serial.printf("No recent broadcast from %s (last received %lu seconds ago)\n",
+                              SENSOR_ADDRESS, (unsigned long)((now - reading.receivedAt) / 1000));
+            }
+            lastStatusAt = now;
+        }
+        return;
+    }
     const bool changed = !lastPrinted.valid ||
                          reading.rawTemperature != lastPrinted.rawTemperature ||
                          reading.rawHumidity != lastPrinted.rawHumidity ||
@@ -252,8 +282,17 @@ void logReading(const SensorReading &reading, uint32_t now)
 void setup()
 {
     Serial.begin(115200);
+#if ARDUINO_USB_CDC_ON_BOOT
+    // Native USB may connect after setup starts. Do not wait indefinitely when
+    // the board runs without a connected serial monitor.
+    const uint32_t serialStartedAt = millis();
+    while (!Serial && millis() - serialStartedAt < 3000) {
+        delay(10);
+    }
+#endif
     delay(200);
     Serial.println("\nESPJaalee starting");
+#if ENABLE_TFT
     if (TFT_BACKLIGHT_PIN >= 0) {
         pinMode(TFT_BACKLIGHT_PIN, OUTPUT);
         digitalWrite(TFT_BACKLIGHT_PIN, HIGH);
@@ -272,6 +311,9 @@ void setup()
         screen.fillSprite(TFT_BLACK);
     }
     drawReading(latestReading, millis());
+#else
+    Serial.println("Console-only mode (TFT disabled)");
+#endif
 
     BLEDevice::init("");
     scanner = BLEDevice::getScan();
@@ -297,7 +339,9 @@ void loop()
     reading = latestReading;
     portEXIT_CRITICAL(&readingMutex);
     const uint32_t now = millis();
+#if ENABLE_TFT
     drawReading(reading, now);
+#endif
     while (Serial.available() > 0) {
         if (Serial.read() == 's') sendScreenshot();
     }
